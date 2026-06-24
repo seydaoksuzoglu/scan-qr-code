@@ -7,7 +7,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np 
-from pyzbar.pyzbar import decode as zbar_decode
+from pyzbar.pyzbar import decode as zbar_decode, ZBarSymbol
 
 # Model Yolları
 MODELS_DIR = Path(__file__).resolve().parent / "models"
@@ -52,7 +52,7 @@ def decode_frame(detector, frame):
     
     # Fallback: pyzbar works on the grayscale image.
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    for symbol in zbar_decode(gray):
+    for symbol in zbar_decode(gray, symbols=[ZBarSymbol.QRCODE]):
         text = symbol.data.decode("utf-8", errors="replace")
         pts = np.array([[p.x, p.y] for p in symbol.polygon], dtype=np.float32)
         results.append((text, pts)) # WeChat ile aynı formatta sonuç döner
