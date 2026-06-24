@@ -1,0 +1,12 @@
+*.pyc
+**/__pycache__
+**/__pycache__/**
+
+.vscode
+
+build/
+**/build
+**/build/**
+
+venv
+CLAUDE.md
