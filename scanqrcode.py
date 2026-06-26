@@ -23,6 +23,8 @@ QUAD_THICKNESS = 2
 
 CAMERA_INDEX = 0 # Harici kamera takarsak 1 yaparız.
 
+MIN_QR_SIDE = 80 # px; below thi a located QR is too small to decode -> skip homography
+
 # Dedektörü Kurma
 # Neden bunu yapıyoruz? Çünkü detektör nesnesini bir kez kurup tekrar tekrar kullanacağız. Her karede yeniden kurmayacağız.
 def build_detector():
@@ -42,6 +44,11 @@ def find_qr_corners(locator, frame):
     if not ok or points is None:       # konumunu çıkarır. Perspektif bozuk olsa bile çoğu zaman konumu bulabilir — çözmek ayrı, bulmak ayrı.
         return None                    # reshape(4, 2) ile OpenCV'nin (1,4,2) çıktısını sade 4 köşeye indirgeriz.
     return points.reshape(4, 2).astype(np.float32)
+
+def quad_side(corners):
+    """Average edge length (px) of the located quad - a cheap size proxy."""
+    sides = [np.linalg.norm(corners[i] - corners[(i+1) % 4]) for i in range(4)]
+    return float(np.mean(sides))
 
 # Homografi ile QR'ı Düz Kareye Çevir
 def warp_qr(frame, corners, size=320, quiet=24):
@@ -63,17 +70,33 @@ def warp_qr(frame, corners, size=320, quiet=24):
     return warped
 
 # Bir Görüntüyü Çöz (sadece metin)
+# Ön İşleme (kontrast iyileştirme)
+# Mantık: Düzeltilmiş kareyi önce ham, sonra CLAHE (yerel kontrast iyileştirme) uygulanmış haliyle çözmeyi dene. Düşük kontrast/gölgeli
+# QR'larda modüllerin siyah-beyaz ayrımını netleştir. Soluk duruma yardım eder. Parlama çözülmez.
 def decode_image(detector, image):
-    """Decode QR test from an image, WeChat first the pyzbar. Text only."""
+    """Decode QR test from an image. Tries the raw image first, then a contrast-enhanced (CLAHE) version.
+    WeChat first pyzbar second, on the each."""
     # Düzeltilmiş karede artık konuma ihtiyacımız yok (kırmızı dikdörtgeni orijinal köşelerle çizeceğiz),
     # o yüzden bu yardımcı sadece metni döndürüyor. Aynı "WeChat -> pyzbar" sırasını koruyor, mantığı tek yerde toplayıp tekrardan kaçındık.
-    texts = [t for t in detector.detectAndDecode(image)[0] if t]
-    if texts:
-        return texts
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    for symbol in zbar_decode(gray, symbols=[ZBarSymbol.QRCODE]):
-        texts.append(symbol.data.decode("utf-8", errors="replace"))
-    return texts
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)) # createCLAHE görüntüyü küçük karelere bölüp kontrastı ayrı ayrı artırır.
+                                                                # global kontrasttan farkı, bir köşedeki gölge diğer köşeyi bozmaz. 
+                                                                # Eğik yer QR'ında ışık dağılımı eşit olmadığı için bu uygun.
+    enhanced = clahe.apply(gray)
+    for candidate in (image, enhanced): # İki aday deniyoruz (image, enhanced): biri çözerse hemen dönüyoruz. C eşiğinden dolayı bu büyük 
+                                        # QR'lı karelerde çalışır küçük karelerde değil.
+        texts = [t for t in detector.detectAndDecode(candidate)[0] if t]
+        if texts:
+            return texts
+        gray_c = candidate if candidate.ndim == 2 else cv2.cvtColor(candidate, cv2.COLOR_BGR2GRAY) 
+        # candidate.ndim == 2 kontrolü enhanced tek kanal (gri), tekrar griye çevirmeye çalışırsak hata verir; onu atlıyoruz.
+        for symbol in zbar_decode(gray_c, symbols=[ZBarSymbol.QRCODE]):
+            text = symbol.data.decode("utf-8", errors="replace")
+            if text:
+                return [text]
+    return []
+    
+    
 
 # Karenin Çözülmesi
 # Mantık: WeChat -> pyzbar
@@ -102,10 +125,12 @@ def decode_frame(detector, locator, frame):
     if results:
         return results # direct solve worked -> skip homography (performance rule)
     
-    # Stage 2 - perspective correction (runs ONLY when direct solve failed).
+    # Stage 2 - perspective correction (only when direct solve failed).
     corners = find_qr_corners(locator, frame)
     if corners is None:
         return results # QR not even located -> nothing to do
+    if quad_side(corners) < MIN_QR_SIDE:
+        return results # located but too small to decode -> skip expensive warp
     warped = warp_qr(frame, corners)
     for text in decode_image(detector, warped):
         results.append((text, corners)) # draw the box with ORIGINAL-frame corners
