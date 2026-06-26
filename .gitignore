@@ -10,3 +10,5 @@ build/
 
 venv
 CLAUDE.md
+
+data/
