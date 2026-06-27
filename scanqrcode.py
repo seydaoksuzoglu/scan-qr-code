@@ -2,7 +2,15 @@
 İHA İçin QR Kod Çözücü
 Mantık: Webcam'den kareyi al -> WeChat ile çöz -> Bulamazsa pyzbar'a düş -> Bulunan QR'ı kırmızı dikdörtgenle çiz, metni yaz.
 """
+import os
+import logging
+import warnings
 
+os.environ["YOLO_VERBOSE"] = "False"
+warnings.filterwarnings("ignore")
+logging.getLogger("ultralytics").setLevel(logging.ERROR)
+
+from qrdet import QRDetector
 from pathlib import Path
 
 import cv2
@@ -32,18 +40,26 @@ def build_detector():
     return cv2.wechat_qrcode_WeChatQRCode(
         DETECT_PROTOTXT, DETECT_MODEL, SR_PROTOTXT, SR_MODEL
     )
+# QR Bulucu (qrdet / YOLOv8) - cv2.QRCodeDetector'ın yerini aldı
+def build_locator(model_size="n"):
+    """qrdet YOLOv8 QR locator. 'n': nano for (Raspberry Pi)"""
+    return QRDetector(model_size=model_size, conf_th=0.5)
 
-# Çözmeden QR Köşelerini Bul
+# QR'ı Bul (çözmeden) - qrdet/YOLO konum bulur
 def find_qr_corners(locator, frame):
-    """Locate a QR in the frame WITHOUT decoding it, using finder patterns.
+    """Locate the confident QR with qrdet (YOLO); return (4, 2) corners or None.
+
+    qrdet, perspektif/bulanıklık altında QR bölgesini cv2.QRCodeDetector'dan çok daha
+    iyi bulur, eski dedektör sahte tespit üretiyordu. 
     
-    Returns a (4, 2) float32 array of corners, or None if no QR is found.
-    This is what lets us correct perspective on a code we cannot yet decode.
+    qrdet birden fazla QR dönebilir, en yüksek confidence'lının quad_xy (4 köşe) alanını alıp doğrudan
+    warp_qr'a veriyoruz. is_bgr=True çünkü OpenCV için BGR gerekli.
     """
-    ok, points = locator.detect(frame) # locator.detect() QR'ı çözmeye çalışmaz, sadece üç köşedeki finder pattern'lerden (büyük kare işaretler)
-    if not ok or points is None:       # konumunu çıkarır. Perspektif bozuk olsa bile çoğu zaman konumu bulabilir — çözmek ayrı, bulmak ayrı.
-        return None                    # reshape(4, 2) ile OpenCV'nin (1,4,2) çıktısını sade 4 köşeye indirgeriz.
-    return points.reshape(4, 2).astype(np.float32)
+    detections = locator.detect(image=frame, is_bgr=True) # cv2 kareleri BGR
+    if not detections:
+        return None
+    best = max(detections, key=lambda d: d["confidence"])
+    return best["quad_xy"].astype(np.float32)
 
 def quad_side(corners):
     """Average edge length (px) of the located quad - a cheap size proxy."""
@@ -149,7 +165,7 @@ def draw_quad(frame, points):
 # main Fonksiyonu
 def main():
     detector = build_detector()
-    locator = cv2.QRCodeDetector() # Çözmeden konum bulan detektör
+    locator = build_locator()
 
     cap = cv2.VideoCapture(CAMERA_INDEX)
     if not cap.isOpened():

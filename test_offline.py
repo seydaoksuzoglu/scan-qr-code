@@ -10,7 +10,7 @@ from pathlib import Path
 
 import cv2
 
-from scanqrcode import build_detector, decode_frame, draw_quad
+from scanqrcode import build_detector, decode_frame, draw_quad, build_locator
 
 BASE = Path(__file__).resolve().parent
 IMAGE_DIR = BASE / "data" / "test_images"
@@ -107,7 +107,7 @@ def annotate(frame, results):
 
 def main():
     detector = build_detector()
-    locator = cv2.QRCodeDetector()
+    locator = build_locator()
     test_images(detector, locator)
     test_videos(detector, locator)
 
